@@ -4,5 +4,4 @@ case class AstNode(token: Token) {
 }
 
 class AST {
-
 }

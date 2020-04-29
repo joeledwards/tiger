@@ -1,9 +1,12 @@
 package com.buzuli.tiger
 
-import akka.stream.{FlowShape, Graph}
+import akka.NotUsed
+import akka.stream.scaladsl.Flow
 
 object TypeChecker {
-  def create: Graph[FlowShape[IrNode, AstNode], Nothing] = {
+  def create: Flow[IrNode, AstNode, NotUsed] = {
+    // TODO: build it
 
+    Flow[IrNode].map(n => AstNode(n.token))
   }
 }

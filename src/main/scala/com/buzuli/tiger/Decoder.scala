@@ -6,7 +6,7 @@ import akka.stream.scaladsl.{Flow, Source}
 import akka.util.ByteString
 
 object Decoder {
-  def create: Graph[FlowShape[ByteString, Char], NotUsed] = {
+  def create: Flow[ByteString, Char, NotUsed] = {
     Flow[ByteString]
       .map(_.decodeString("utf-8"))
       .map(_.toCharArray)

@@ -10,6 +10,16 @@ Interpreter for the Tiger programming language.
 
 This project implements a streaming parser and interpreter. It is written in Scala with the pipline powered by Akka streams.
 
+Stream stages:
+- file source
+- decoder
+- lexer
+- parser
+- type-validator
+- interpreter
+
+The entry point is `com.buzuli.tiger.Tiger.run` where the stream graph is assembled and run.
+
 ## Requirements
 
 - [SBT 1.0+](https://www.scala-sbt.org/)
@@ -19,6 +29,17 @@ This project implements a streaming parser and interpreter. It is written in Sca
 
 - [IntelliJ IDEA](https://www.jetbrains.com/idea/)
 
+## Testing
+
+Run `sbt test` to run through the full test suite.
+
+You can test an individual spec via `sbt testOnly`.
+
+For example, to test only the LexerSpec:
+```
+$ sbt testOnly com.buzuli.tiger.LexerSpec
+```
+
 ## Building
 
 The `assembly` plugin is used to generate a fat jar containing all of the dependencies.
@@ -26,3 +47,4 @@ The `assembly` plugin is used to generate a fat jar containing all of the depend
 ```
 $ sbt assembly
 ```
+
