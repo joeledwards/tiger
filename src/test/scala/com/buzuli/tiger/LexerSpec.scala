@@ -8,6 +8,7 @@ import akka.NotUsed
 import akka.actor.ActorSystem
 import akka.stream.{ActorMaterializer, Graph}
 import akka.stream.scaladsl.Source
+import com.buzuli.tiger
 
 import scala.concurrent.duration.Duration
 import scala.concurrent.{Await, ExecutionContext, Future}
@@ -53,6 +54,87 @@ class LexerSpec extends AnyWordSpec with Matchers {
       }
     }
 
+    // Comments
+    "lexing a comment" should {
+      "discard a stand-alone, single-line comment" in {
+        validate("""/* this is a single-line comment */""") { Nil }
+      }
+
+      "discard a stand-alone, multi-line comment" in {
+        validate(
+          """
+            |/*
+            | this is a multi-
+            | line comment
+            |*/""".stripMargin
+        ) { Nil }
+      }
+
+      "discard a single-line comment, keeping code" in {
+        validate(
+          """
+            |/* a single value */
+            |identifier := "value"
+            |""".stripMargin
+        ) {
+          TokenId("identifier") ::
+          TokenAssignment ::
+          TokenString("value") ::
+          Nil
+        }
+
+        validate(
+          """
+            |id := "value" /* there is another value after this one */
+            |di := "eulav"
+            |""".stripMargin
+        ) {
+          TokenId("id") ::
+          TokenAssignment ::
+          TokenString("value") ::
+          TokenId("di") ::
+          TokenAssignment ::
+          TokenString("eulav") ::
+          Nil
+        }
+      }
+
+      "discard a multi-line comment, keeping code" in {
+        validate(
+          """
+            |/*
+            | there is only
+            | one value
+            |*/
+            |a := 1
+            |""".stripMargin
+        ) {
+          TokenId("a") ::
+          TokenAssignment ::
+          TokenInteger(1) ::
+          Nil
+        }
+
+        validate(
+          """
+            |a := 1 /*
+            | there is only
+            | one value
+            |*/
+            |b := 2
+            |""".stripMargin
+        ) {
+          TokenId("a") ::
+          TokenAssignment ::
+          TokenInteger(1) ::
+          TokenId("b") ::
+          TokenAssignment ::
+          TokenInteger(2) ::
+          Nil
+        }
+      }
+    }
+
     // String
     "lexing a string" should {
       "handle a simple string" in {
@@ -93,6 +175,111 @@ class LexerSpec extends AnyWordSpec with Matchers {
         validate(" 1 ") { TokenInteger(1) :: Nil }
         validate("\n12\n") { TokenInteger(12) :: Nil }
       }
+
+      "should reject bad integer literals" in {
+        invalidate("123abc")
+        invalidate("123z")
+      }
+    }
+
+    // Overlapping tokens
+    "lexing overlapping tokens (stem groups)" should {
+      "should consume tokens with common beginnings" in {
+        validate("a:1") { TokenId("a") :: TokenColon :: TokenInteger(1) :: Nil }
+        validate("a:=1") { TokenId("a") :: TokenAssignment :: TokenInteger(1) :: Nil }
+
+        validate("1 > 2") { TokenInteger(1) :: TokenGreater :: TokenInteger(2) :: Nil }
+        validate("1 >= 2") { TokenInteger(1) :: TokenGreaterOrEqual :: TokenInteger(2) :: Nil }
+
+        validate("1 < 2") { TokenInteger(1) :: TokenLess :: TokenInteger(2) :: Nil }
+        validate("1 <= 2") { TokenInteger(1) :: TokenLessOrEqual :: TokenInteger(2) :: Nil }
+        validate("1 <> 2") { TokenInteger(1) :: TokenInequality :: TokenInteger(2) :: Nil }
+
+        // Division operator overlaps with comments
+        validate("1/2") { TokenInteger(1) :: TokenDivision :: TokenInteger(2) :: Nil }
+        validate("2 / 1") { TokenInteger(2) :: TokenDivision :: TokenInteger(1) :: Nil }
+      }
+    }
+
+    // All symbols
+    "lexing symbols" should {
+      "should correctly identify all symbols" in {
+        validate("{") { TokenBraceOpen :: Nil }
+        validate("}") { TokenBraceClose :: Nil }
+        validate("[") { TokenBracketOpen :: Nil }
+        validate("]") { TokenBracketClose :: Nil }
+        validate("(") { TokenParenOpen :: Nil }
+        validate(")") { TokenParenClose :: Nil }
+
+        validate(".") { TokenDereference :: Nil }
+        validate(",") { TokenFieldSep :: Nil }
+        validate(";") { TokenSemicolon :: Nil }
+        validate("*") { TokenMultiplication :: Nil }
+        validate("/") { TokenDivision :: Nil }
+        validate("+") { TokenAddition :: Nil }
+        validate("-") { TokenSubtraction :: Nil }
+        validate("=") { TokenEquality :: Nil }
+
+        validate(":") { TokenColon :: Nil }
+        validate(":=") { TokenAssignment :: Nil }
+
+        validate("<") { TokenLess :: Nil }
+        validate("<=") { TokenLessOrEqual :: Nil }
+        validate("<>") { TokenInequality :: Nil }
+
+        validate(">") { TokenGreater :: Nil }
+        validate(">=") { TokenGreaterOrEqual :: Nil }
+
+        validate("&") { TokenAnd :: Nil }
+        validate("|") { TokenOr :: Nil }
+      }
+    }
+
+    // All keywords
+    "lexing keywords" should {
+      "should correctly identify all symbols" in {
+        validate("array") { TokenKeyArray :: Nil }
+        validate("break") { TokenKeyBreak :: Nil }
+        validate("do") { TokenKeyDo :: Nil }
+        validate("else") { TokenKeyElse :: Nil }
+        validate("end") { TokenKeyEnd :: Nil }
+        validate("for") { TokenKeyFor :: Nil }
+        validate("function") { TokenKeyFunction :: Nil }
+        validate("if") { TokenKeyIf :: Nil }
+        validate("in") { TokenKeyIn :: Nil }
+        validate("let") { TokenKeyLet :: Nil }
+        validate("nil") { TokenKeyNil :: Nil }
+        validate("of") { TokenKeyOf :: Nil }
+        validate("then") { TokenKeyThen :: Nil }
+        validate("to") { TokenKeyTo :: Nil }
+        validate("type") { TokenKeyType :: Nil }
+        validate("var") { TokenKeyVar :: Nil }
+        validate("while") { TokenKeyWhile :: Nil }
+      }
+    }
+
+    // Identifiers
+    "lexing identifiers" should {
+      "should collect identifiers" in {
+        validate("when") { TokenId("when") :: Nil }
+        validate("id") { TokenId("id") :: Nil }
+        validate("id13") { TokenId("id13") :: Nil }
+        validate("i1d3") { TokenId("i1d3") :: Nil }
+        validate("id13_") { TokenId("id13_") :: Nil }
+        validate("id13__") { TokenId("id13__") :: Nil }
+        validate("id_13") { TokenId("id_13") :: Nil }
+        validate("id__13") { TokenId("id__13") :: Nil }
+      }
+
+      "should reject bad identifiers" in {
+        invalidate("_id")
+        invalidate("_1d")
+        invalidate("_12")
+        invalidate("12_")
+        invalidate("1d_")
+        invalidate("1_2")
+        invalidate("1_d")
+      }
     }
 
     // Multi-token inputs
@@ -107,6 +294,14 @@ class LexerSpec extends AnyWordSpec with Matchers {
         validate("{ \"k\" : \"v\" }") {
           TokenBraceOpen :: TokenString("k") :: TokenColon :: TokenString("v") :: TokenBraceClose :: Nil
         }
+      }
+    }
+
+    "lexing full programs" should {
+      "lex all parts" in {
+        """
+        |
+        |""".stripMargin
       }
     }
   }

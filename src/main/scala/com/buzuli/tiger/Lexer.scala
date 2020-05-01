@@ -3,6 +3,21 @@ package com.buzuli.tiger
 import akka.NotUsed
 import akka.stream.scaladsl.{Flow, Source}
 
+sealed trait ConsumeResult
+case object ConsumeContinue extends ConsumeResult
+case class ConsumeContinueWithNewContext(newContext: LexConsumer) extends ConsumeResult
+case class ConsumeComplete(token: Option[Token], char: Option[Char] = None) extends ConsumeResult
+case class ConsumeReject(error: TigerError) extends ConsumeResult
+
+trait LexConsumer {
+  def line: Int
+  def column: Int
+  def input: String
+
+  def nom(char: Char): ConsumeResult
+  def end(): ConsumeResult = ConsumeReject(LexerError(s"Unexpected end of token [${input}]", line, column))
+}
+
 object Lexer {
   def create: Flow[Char, Token, NotUsed] = {
     var line: Int = 0
@@ -14,15 +29,27 @@ object Lexer {
         case (Some(ctxt), c) => ctxt.nom(c) match {
           // Continue processing contextual consumers
           case ConsumeReject(error) => throw error
-          case ConsumeComplete(token, Some(extraChar)) => {
+          case ConsumeComplete(maybeToken, Some(extraChar)) => {
             // Handle a rejected (peaked) character.
-            // Since a token was emitted, we clear context.
+
+            // Since a consume was concluded, we clear context.
             context = None
-            token :: consumeChar(extraChar)
+
+            maybeToken match {
+              case None => consumeChar(extraChar)
+              case Some(token) => token :: consumeChar(extraChar)
+            }
           }
-          case ConsumeComplete(token, None) => {
+          case ConsumeComplete(maybeToken, None) => {
             context = None
-            token :: Nil
+            maybeToken match {
+              case None => Nil
+              case Some(token) => token :: Nil
+            }
+          }
+          case ConsumeContinueWithNewContext(newContext) => {
+            context = Some(newContext)
+            Nil
           }
           case ConsumeContinue => Nil
         }
@@ -41,7 +68,6 @@ object Lexer {
         case (None, ',') => TokenFieldSep :: Nil
         case (None, ';') => TokenSemicolon :: Nil
         case (None, '*') => TokenMultiplication :: Nil
-        case (None, '/') => TokenDivision :: Nil
         case (None, '+') => TokenAddition :: Nil
         case (None, '-') => TokenSubtraction :: Nil
         case (None, '=') => TokenEquality :: Nil
@@ -58,6 +84,11 @@ object Lexer {
 
         case (None, '>') => {
           context = Some(StemGroup(char, TokenGreater, line, column))
+          Nil
+        }
+
+        case (None, '/') => {
+          context = Some(StemGroup(char, TokenDivision, line, column))
           Nil
         }
 
@@ -93,7 +124,8 @@ object Lexer {
           case (None, Some(ctxt)) => {
             // We reached the end of input, but we still have active context
             ctxt.end() match {
-              case ConsumeComplete(token, _) => token :: Nil
+              case ConsumeComplete(Some(token), _) => token :: Nil
+              case ConsumeComplete(None, _) => Nil
               case ConsumeReject(error) => throw error
               case _ => {
                 throw LexerError(s"Unexpected end of stream with active context ${ctxt}", line, column)
@@ -119,20 +151,6 @@ object Lexer {
   }
 }
 
-sealed trait ConsumeResult
-case object ConsumeContinue extends ConsumeResult
-case class ConsumeComplete(token: Token, char: Option[Char] = None) extends ConsumeResult
-case class ConsumeReject(error: TigerError) extends ConsumeResult
-
-trait LexConsumer {
-  def line: Int
-  def column: Int
-  def input: String
-
-  def nom(char: Char): ConsumeResult
-  def end(): ConsumeResult = ConsumeReject(LexerError(s"Unexpected end of token [${input}]", line, column))
-}
-
 case class StemGroup(char: Char, token: Token, line: Int, column: Int) extends LexConsumer {
   private var builder = new StringBuilder += char
 
@@ -142,13 +160,15 @@ case class StemGroup(char: Char, token: Token, line: Int, column: Int) extends L
     builder += char
 
     (token, char) match {
-      case (TokenColon, '=') => ConsumeComplete(TokenAssignment)
-      case (TokenColon, _) => ConsumeComplete(TokenColon, Some(char))
-      case (TokenLess, '>') => ConsumeComplete(TokenInequality)
-      case (TokenLess, '=') => ConsumeComplete(TokenLessOrEqual)
-      case (TokenLess, _) => ConsumeComplete(TokenLess, Some(char))
-      case (TokenGreater, '=') => ConsumeComplete(TokenGreaterOrEqual)
-      case (TokenGreater, _) => ConsumeComplete(TokenGreater, Some(char))
+      case (TokenColon, '=') => ConsumeComplete(Some(TokenAssignment))
+      case (TokenColon, _) => ConsumeComplete(Some(TokenColon), Some(char))
+      case (TokenLess, '>') => ConsumeComplete(Some(TokenInequality))
+      case (TokenLess, '=') => ConsumeComplete(Some(TokenLessOrEqual))
+      case (TokenLess, _) => ConsumeComplete(Some(TokenLess), Some(char))
+      case (TokenGreater, '=') => ConsumeComplete(Some(TokenGreaterOrEqual))
+      case (TokenGreater, _) => ConsumeComplete(Some(TokenGreater), Some(char))
+      case (TokenDivision, '*') => ConsumeContinueWithNewContext(LexComment(line, column))
+      case (TokenDivision, _) => ConsumeComplete(Some(TokenDivision), Some(char))
       case _ => ConsumeReject(LexerError(s"""Unsupported token "${builder.toString}"""", line, column))
     }
   }
@@ -156,7 +176,7 @@ case class StemGroup(char: Char, token: Token, line: Int, column: Int) extends L
   override def end(): ConsumeResult = {
     // NOTE: if we ever stem on a value which is not a valid stand-alone token,
     //       we will need to identify it here and kick back a LexerError
-    ConsumeComplete(token)
+    ConsumeComplete(Some(token))
   }
 }
 
@@ -175,13 +195,14 @@ case class LexInteger(char: Char, line: Int, column: Int) extends LexConsumer {
       ConsumeReject(LexerError(s"Invalid numeric constant ${builder}", line, column))
     }
     case c => {
-      ConsumeComplete(TokenInteger(builder.toString.toInt), Some(c))
+      ConsumeComplete(Some(intValue), Some(c))
     }
   }
 
   override def end(): ConsumeResult = {
-    ConsumeComplete(TokenInteger(builder.toString.toInt))
-  }
+    ConsumeComplete(Some(intValue)) }
+
+  private def intValue: Token = TokenInteger(builder.toString.toInt)
 }
 
 case class LexId(char: Char, line: Int, column: Int) extends LexConsumer {
@@ -196,28 +217,32 @@ case class LexId(char: Char, line: Int, column: Int) extends LexConsumer {
     }
     case c => {
       // Identify keywords
-      val token: Token = builder.toString match {
-        case "array" => TokenKeyArray
-        case "break" => TokenKeyBreak
-        case "do" => TokenKeyDo
-        case "else" => TokenKeyElse
-        case "end" => TokenKeyEnd
-        case "for" => TokenKeyFor
-        case "function" => TokenKeyFunction
-        case "if" => TokenKeyIf
-        case "in" => TokenKeyIn
-        case "let" => TokenKeyLet
-        case "nil" => TokenKeyNil
-        case "of" => TokenKeyOf
-        case "then" => TokenKeyThen
-        case "to" => TokenKeyTo
-        case "type" => TokenKeyType
-        case "var" => TokenKeyVar
-        case "while" => TokenKeyWhile
-        case s => TokenId(s)
-      }
-      ConsumeComplete(token, Some(c))
+      val token: Token = keywordLense()
+      ConsumeComplete(Some(token), Some(c))
     }
+  }
+
+  override def end(): ConsumeResult = ConsumeComplete(Some(keywordLense()))
+
+  private def keywordLense(): Token = builder.toString match {
+    case "array" => TokenKeyArray
+    case "break" => TokenKeyBreak
+    case "do" => TokenKeyDo
+    case "else" => TokenKeyElse
+    case "end" => TokenKeyEnd
+    case "for" => TokenKeyFor
+    case "function" => TokenKeyFunction
+    case "if" => TokenKeyIf
+    case "in" => TokenKeyIn
+    case "let" => TokenKeyLet
+    case "nil" => TokenKeyNil
+    case "of" => TokenKeyOf
+    case "then" => TokenKeyThen
+    case "to" => TokenKeyTo
+    case "type" => TokenKeyType
+    case "var" => TokenKeyVar
+    case "while" => TokenKeyWhile
+    case s => TokenId(s)
   }
 }
 
@@ -241,7 +266,7 @@ case class LexString(line: Int, column: Int) extends LexConsumer {
     (escape, char) match {
       case (EscapeOff, '"') => {
         // Complete the string if we are not escaping
-        ConsumeComplete(TokenString(builder.toString))
+        ConsumeComplete(Some(TokenString(builder.toString)))
       }
       case (EscapeOff, '\\') => {
         // Begin escaping if we are not already escaping
@@ -316,9 +341,33 @@ case class LexString(line: Int, column: Int) extends LexConsumer {
       }
       case _ => {
         escape match {
-          case EscapeOff => ConsumeReject(LexerError(s"""Invalid string literal "${builder}"""", line, column))
-          case _ => ConsumeReject(LexerError(s"""Invalid escape sequence in string literal "${builder}"""", line, column))
+          case EscapeOff => ConsumeReject(LexerError(s"""Invalid string literal "${raw}"""", line, column))
+          case _ => ConsumeReject(LexerError(s"""Invalid escape sequence in string literal "${raw}"""", line, column))
         }
+      }
+    }
+  }
+}
+
+case class LexComment(line: Int, column: Int) extends LexConsumer {
+  private var raw = new StringBuilder ++= "/*"
+  private var builder = new StringBuilder
+  private var endSignaled = false
+
+  override def input: String = raw.toString
+
+  override def nom(char: Char): ConsumeResult = {
+    raw += char
+
+    (endSignaled, char) match {
+      case (true, '/') => ConsumeComplete(None)
+      case (_, '*') => {
+        endSignaled = true
+        ConsumeContinue
+      }
+      case (_, _) => {
+        endSignaled = false
+        ConsumeContinue
       }
     }
   }
