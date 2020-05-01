@@ -29,22 +29,13 @@ object Lexer {
         case (Some(ctxt), c) => ctxt.nom(c) match {
           // Continue processing contextual consumers
           case ConsumeReject(error) => throw error
-          case ConsumeComplete(maybeToken, Some(extraChar)) => {
-            // Handle a rejected (peaked) character.
-
-            // Since a consume was concluded, we clear context.
+          case completion: ConsumeComplete => {
             context = None
-
-            maybeToken match {
-              case None => consumeChar(extraChar)
-              case Some(token) => token :: consumeChar(extraChar)
-            }
-          }
-          case ConsumeComplete(maybeToken, None) => {
-            context = None
-            maybeToken match {
-              case None => Nil
-              case Some(token) => token :: Nil
+            completion match {
+              case ConsumeComplete(None, None) => Nil
+              case ConsumeComplete(Some(token), None) => token :: Nil
+              case ConsumeComplete(None, Some(extraChar)) => consumeChar(extraChar)
+              case ConsumeComplete(Some(token), Some(extraChar)) => token :: consumeChar(extraChar)
             }
           }
           case ConsumeContinueWithNewContext(newContext) => {
