@@ -5,7 +5,7 @@ import akka.stream.scaladsl.{Flow, Source}
 
 sealed trait ConsumeResult
 case object ConsumeContinue extends ConsumeResult
-case class ConsumeContinueWithNewContext(newContext: LexConsumer) extends ConsumeResult
+case class ConsumeContinueWithNewConsumer(newConsumer: LexConsumer) extends ConsumeResult
 case class ConsumeComplete(token: Option[Token], char: Option[Char] = None) extends ConsumeResult
 case class ConsumeReject(error: TigerError) extends ConsumeResult
 
@@ -26,8 +26,8 @@ object Lexer {
 
     def consumeChar(char: Char): List[Token] = {
       (context, char) match {
-        case (Some(ctxt), c) => ctxt.nom(c) match {
-          // Continue processing contextual consumers
+        case (Some(consumer), c) => consumer.nom(c) match {
+          // Feed the active consumer
           case ConsumeReject(error) => throw error
           case completion: ConsumeComplete => {
             context = None
@@ -38,8 +38,8 @@ object Lexer {
               case ConsumeComplete(Some(token), Some(extraChar)) => token :: consumeChar(extraChar)
             }
           }
-          case ConsumeContinueWithNewContext(newContext) => {
-            context = Some(newContext)
+          case ConsumeContinueWithNewConsumer(newConsumer) => {
+            context = Some(newConsumer)
             Nil
           }
           case ConsumeContinue => Nil
@@ -112,14 +112,14 @@ object Lexer {
       .mapConcat[Token]((char: Option[Char]) => {
         val tokens: List[Token] = (char, context) match {
           case (Some(c), _) => consumeChar(c)
-          case (None, Some(ctxt)) => {
+          case (None, Some(consumer)) => {
             // We reached the end of input, but we still have active context
-            ctxt.end() match {
+            consumer.end() match {
               case ConsumeComplete(Some(token), _) => token :: Nil
               case ConsumeComplete(None, _) => Nil
               case ConsumeReject(error) => throw error
               case _ => {
-                throw LexerError(s"Unexpected end of stream with active context ${ctxt}", line, column)
+                throw LexerError(s"Unexpected end of stream with active consumer ${consumer}", line, column)
               }
             }
           }
@@ -158,7 +158,7 @@ case class StemGroup(char: Char, token: Token, line: Int, column: Int) extends L
       case (TokenLess, _) => ConsumeComplete(Some(TokenLess), Some(char))
       case (TokenGreater, '=') => ConsumeComplete(Some(TokenGreaterOrEqual))
       case (TokenGreater, _) => ConsumeComplete(Some(TokenGreater), Some(char))
-      case (TokenDivision, '*') => ConsumeContinueWithNewContext(LexComment(line, column))
+      case (TokenDivision, '*') => ConsumeContinueWithNewConsumer(LexComment(line, column))
       case (TokenDivision, _) => ConsumeComplete(Some(TokenDivision), Some(char))
       case _ => ConsumeReject(LexerError(s"""Unsupported token "${builder.toString}"""", line, column))
     }
