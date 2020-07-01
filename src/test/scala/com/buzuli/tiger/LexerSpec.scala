@@ -201,9 +201,9 @@ class LexerSpec extends AnyWordSpec with Matchers {
       }
     }
 
-    // All symbols
+    // All punctuation and operators
     "lexing symbols" should {
-      "should correctly identify all symbols" in {
+      "should correctly identify all punctuation and operators" in {
         validate("{") { TokenBraceOpen :: Nil }
         validate("}") { TokenBraceClose :: Nil }
         validate("[") { TokenBracketOpen :: Nil }
@@ -236,8 +236,8 @@ class LexerSpec extends AnyWordSpec with Matchers {
     }
 
     // All keywords
-    "lexing keywords" should {
-      "should correctly identify all symbols" in {
+    "lexing identifiers" should {
+      "should correctly identify all keywords" in {
         validate("array") { TokenKeyArray :: Nil }
         validate("break") { TokenKeyBreak :: Nil }
         validate("do") { TokenKeyDo :: Nil }
