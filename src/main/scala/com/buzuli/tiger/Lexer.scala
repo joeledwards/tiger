@@ -3,19 +3,19 @@ package com.buzuli.tiger
 import akka.NotUsed
 import akka.stream.scaladsl.{Flow, Source}
 
-sealed trait ConsumeResult
-case object ConsumeContinue extends ConsumeResult
-case class ConsumeContinueWithNewConsumer(newConsumer: LexConsumer) extends ConsumeResult
-case class ConsumeComplete(token: Option[Token], char: Option[Char] = None) extends ConsumeResult
-case class ConsumeReject(error: TigerError) extends ConsumeResult
+sealed trait LexConsumeResult
+case object LexConsumeContinue extends LexConsumeResult
+case class LexConsumeContinueWithNewConsumer(newConsumer: LexConsumer) extends LexConsumeResult
+case class LexConsumeComplete(token: Option[Token], char: Option[Char] = None) extends LexConsumeResult
+case class LexConsumeReject(error: TigerError) extends LexConsumeResult
 
 trait LexConsumer {
   def line: Int
   def column: Int
   def input: String
 
-  def nom(char: Char): ConsumeResult
-  def end(): ConsumeResult = ConsumeReject(LexerError(s"Unexpected end of token [${input}]", line, column))
+  def nom(char: Char): LexConsumeResult
+  def end(): LexConsumeResult = LexConsumeReject(LexerError(s"Unexpected end of token [${input}]", line, column))
 }
 
 object Lexer {
@@ -28,21 +28,21 @@ object Lexer {
       (context, char) match {
         case (Some(consumer), c) => consumer.nom(c) match {
           // Feed the active consumer
-          case ConsumeReject(error) => throw error
-          case completion: ConsumeComplete => {
+          case LexConsumeReject(error) => throw error
+          case completion: LexConsumeComplete => {
             context = None
             completion match {
-              case ConsumeComplete(None, None) => Nil
-              case ConsumeComplete(Some(token), None) => token :: Nil
-              case ConsumeComplete(None, Some(extraChar)) => consumeChar(extraChar)
-              case ConsumeComplete(Some(token), Some(extraChar)) => token :: consumeChar(extraChar)
+              case LexConsumeComplete(None, None) => Nil
+              case LexConsumeComplete(Some(token), None) => token :: Nil
+              case LexConsumeComplete(None, Some(extraChar)) => consumeChar(extraChar)
+              case LexConsumeComplete(Some(token), Some(extraChar)) => token :: consumeChar(extraChar)
             }
           }
-          case ConsumeContinueWithNewConsumer(newConsumer) => {
+          case LexConsumeContinueWithNewConsumer(newConsumer) => {
             context = Some(newConsumer)
             Nil
           }
-          case ConsumeContinue => Nil
+          case LexConsumeContinue => Nil
         }
         case (None, '"') => {
           context = Some(LexString(line, column))
@@ -115,9 +115,9 @@ object Lexer {
           case (None, Some(consumer)) => {
             // We reached the end of input, but we still have active context
             consumer.end() match {
-              case ConsumeComplete(Some(token), _) => token :: Nil
-              case ConsumeComplete(None, _) => Nil
-              case ConsumeReject(error) => throw error
+              case LexConsumeComplete(Some(token), _) => token :: Nil
+              case LexConsumeComplete(None, _) => Nil
+              case LexConsumeReject(error) => throw error
               case _ => {
                 throw LexerError(s"Unexpected end of stream with active consumer ${consumer}", line, column)
               }
@@ -147,27 +147,27 @@ case class StemGroup(char: Char, token: Token, line: Int, column: Int) extends L
 
   override def input = builder.toString
 
-  override def nom(char: Char): ConsumeResult = {
+  override def nom(char: Char): LexConsumeResult = {
     builder += char
 
     (token, char) match {
-      case (TokenColon, '=') => ConsumeComplete(Some(TokenAssignment))
-      case (TokenColon, _) => ConsumeComplete(Some(TokenColon), Some(char))
-      case (TokenLess, '>') => ConsumeComplete(Some(TokenInequality))
-      case (TokenLess, '=') => ConsumeComplete(Some(TokenLessOrEqual))
-      case (TokenLess, _) => ConsumeComplete(Some(TokenLess), Some(char))
-      case (TokenGreater, '=') => ConsumeComplete(Some(TokenGreaterOrEqual))
-      case (TokenGreater, _) => ConsumeComplete(Some(TokenGreater), Some(char))
-      case (TokenDivision, '*') => ConsumeContinueWithNewConsumer(LexComment(line, column))
-      case (TokenDivision, _) => ConsumeComplete(Some(TokenDivision), Some(char))
-      case _ => ConsumeReject(LexerError(s"""Unsupported token "${builder.toString}"""", line, column))
+      case (TokenColon, '=') => LexConsumeComplete(Some(TokenAssignment))
+      case (TokenColon, _) => LexConsumeComplete(Some(TokenColon), Some(char))
+      case (TokenLess, '>') => LexConsumeComplete(Some(TokenInequality))
+      case (TokenLess, '=') => LexConsumeComplete(Some(TokenLessOrEqual))
+      case (TokenLess, _) => LexConsumeComplete(Some(TokenLess), Some(char))
+      case (TokenGreater, '=') => LexConsumeComplete(Some(TokenGreaterOrEqual))
+      case (TokenGreater, _) => LexConsumeComplete(Some(TokenGreater), Some(char))
+      case (TokenDivision, '*') => LexConsumeContinueWithNewConsumer(LexComment(line, column))
+      case (TokenDivision, _) => LexConsumeComplete(Some(TokenDivision), Some(char))
+      case _ => LexConsumeReject(LexerError(s"""Unsupported token "${builder.toString}"""", line, column))
     }
   }
 
-  override def end(): ConsumeResult = {
+  override def end(): LexConsumeResult = {
     // NOTE: if we ever stem on a value which is not a valid stand-alone token,
     //       we will need to identify it here and kick back a LexerError
-    ConsumeComplete(Some(token))
+    LexConsumeComplete(Some(token))
   }
 }
 
@@ -176,22 +176,22 @@ case class LexInteger(char: Char, line: Int, column: Int) extends LexConsumer {
 
   override def input = builder.toString
 
-  override def nom(char: Char): ConsumeResult = char match {
+  override def nom(char: Char): LexConsumeResult = char match {
     case c if c.isDigit => {
       builder += c
-      ConsumeContinue
+      LexConsumeContinue
     }
     case c if c.isLetter => {
       builder += c
-      ConsumeReject(LexerError(s"Invalid numeric constant ${builder}", line, column))
+      LexConsumeReject(LexerError(s"Invalid numeric constant ${builder}", line, column))
     }
     case c => {
-      ConsumeComplete(Some(intValue), Some(c))
+      LexConsumeComplete(Some(intValue), Some(c))
     }
   }
 
-  override def end(): ConsumeResult = {
-    ConsumeComplete(Some(intValue)) }
+  override def end(): LexConsumeResult = {
+    LexConsumeComplete(Some(intValue)) }
 
   private def intValue: Token = TokenInteger(builder.toString.toInt)
 }
@@ -201,19 +201,19 @@ case class LexId(char: Char, line: Int, column: Int) extends LexConsumer {
 
   override def input = builder.toString
 
-  override def nom(char: Char): ConsumeResult = char match {
+  override def nom(char: Char): LexConsumeResult = char match {
     case c if (c.isLetterOrDigit || c == '_') => {
       builder += c
-      ConsumeContinue
+      LexConsumeContinue
     }
     case c => {
       // Identify keywords
       val token: Token = keywordLense()
-      ConsumeComplete(Some(token), Some(c))
+      LexConsumeComplete(Some(token), Some(c))
     }
   }
 
-  override def end(): ConsumeResult = ConsumeComplete(Some(keywordLense()))
+  override def end(): LexConsumeResult = LexConsumeComplete(Some(keywordLense()))
 
   private def keywordLense(): Token = builder.toString match {
     case "array" => TokenKeyArray
@@ -251,89 +251,89 @@ case class LexString(line: Int, column: Int) extends LexConsumer {
 
   override def input: String = raw.toString
 
-  override def nom(char: Char): ConsumeResult = {
+  override def nom(char: Char): LexConsumeResult = {
     raw += char
 
     (escape, char) match {
       case (EscapeOff, '"') => {
         // Complete the string if we are not escaping
-        ConsumeComplete(Some(TokenString(builder.toString)))
+        LexConsumeComplete(Some(TokenString(builder.toString)))
       }
       case (EscapeOff, '\\') => {
         // Begin escaping if we are not already escaping
         escape = EscapeStart
-        ConsumeContinue
+        LexConsumeContinue
       }
       case (EscapeOff, c) => {
         // Add characters if we are not escaping
         builder += c
-        ConsumeContinue
+        LexConsumeContinue
       }
       case (EscapeStart, 'n') => {
         builder += '\n'
         escape = EscapeOff
-        ConsumeContinue
+        LexConsumeContinue
       }
       case (EscapeStart, 't') => {
         builder += '\t'
         escape = EscapeOff
-        ConsumeContinue
+        LexConsumeContinue
       }
       case (EscapeStart, '^') => {
         // Begin consuming a control character
         escape = EscapeControl
-        ConsumeContinue
+        LexConsumeContinue
       }
       case (EscapeControl, 'c') => {
         // Emit the ^C control character
         builder += 3.toChar
         escape = EscapeOff
-        ConsumeContinue
+        LexConsumeContinue
       }
       case (EscapeStart, x) if x.isDigit => {
         // Start consuming an ascii code
         escape = EscapeAscii(x :: Nil)
-        ConsumeContinue
+        LexConsumeContinue
       }
       case (EscapeAscii(x :: Nil), y) if y.isDigit => {
         // Continue consuming an ascii code
         escape = EscapeAscii(x :: y :: Nil)
-        ConsumeContinue
+        LexConsumeContinue
       }
       case (EscapeAscii(x :: y :: Nil), z) if z.isDigit => {
         // Emit a complete ascii code
         builder += s"$x$y$z".toInt.toChar
         escape = EscapeOff
-        ConsumeContinue
+        LexConsumeContinue
       }
       case (EscapeStart, '"') => {
         builder += '"'
         escape = EscapeOff
-        ConsumeContinue
+        LexConsumeContinue
       }
       case (EscapeStart, '\\') => {
         builder += '\\'
         escape = EscapeOff
-        ConsumeContinue
+        LexConsumeContinue
       }
       case (EscapeStart, c) if c.isWhitespace => {
         // Start ignoring spaces
         escape = EscapeSpace
-        ConsumeContinue
+        LexConsumeContinue
       }
       case (EscapeSpace, c) if c.isWhitespace => {
         // Continue ignoring spaces
-        ConsumeContinue
+        LexConsumeContinue
       }
       case (EscapeSpace, '\\') => {
         // Done ignoring spaces
         escape = EscapeOff
-        ConsumeContinue
+        LexConsumeContinue
       }
       case _ => {
         escape match {
-          case EscapeOff => ConsumeReject(LexerError(s"""Invalid string literal "${raw}"""", line, column))
-          case _ => ConsumeReject(LexerError(s"""Invalid escape sequence in string literal "${raw}"""", line, column))
+          case EscapeOff => LexConsumeReject(LexerError(s"""Invalid string literal "${raw}"""", line, column))
+          case _ => LexConsumeReject(LexerError(s"""Invalid escape sequence in string literal "${raw}"""", line, column))
         }
       }
     }
@@ -347,18 +347,18 @@ case class LexComment(line: Int, column: Int) extends LexConsumer {
 
   override def input: String = raw.toString
 
-  override def nom(char: Char): ConsumeResult = {
+  override def nom(char: Char): LexConsumeResult = {
     raw += char
 
     (endSignaled, char) match {
-      case (true, '/') => ConsumeComplete(None)
+      case (true, '/') => LexConsumeComplete(None)
       case (_, '*') => {
         endSignaled = true
-        ConsumeContinue
+        LexConsumeContinue
       }
       case (_, _) => {
         endSignaled = false
-        ConsumeContinue
+        LexConsumeContinue
       }
     }
   }
